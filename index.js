@@ -56,6 +56,7 @@ rds.describeDBLogFiles(params, function (err, data) {
                     logGroupNamePrefix: 'STRING_VALUE',
                     nextToken: 'STRING_VALUE'
                 };
+                //check to see if log group exists for db instance first
                 cloudwatchlogs.describeLogGroups(params, function (err, data) {
                     if (err) console.log(err, err.stack); // an error occurred
                     else console.log(data); // successful response

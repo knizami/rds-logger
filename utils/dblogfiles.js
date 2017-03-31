@@ -9,13 +9,148 @@ var rds = new AWS.RDS({
 //NOTE:  Its possible that filenames would change from version to version of DB
 //TODO:  validation code that log files for a given db type / version are correct
 
+var getLatestCWEvent = function getLatestCWEvent(instanceId, logStream, cb) {
+    var params = {
+        logGroupName: instanceId,
+        /* required */
+        logStreamName: logStream,
+        /* required */
+        //  endTime: 0,
+        limit: 1
+        //  nextToken: 'STRING_VALUE',
+        //  startFromHead: true || false,
+        //  startTime: 0
+    };
+
+    cloudwatchlogs.getLogEvents(params, function (err, data) {
+        if (err) {
+            cb(err, null); // an error occurred
+        } else {
+            var retData = {};
+            retData.cwLogLastLine = (data.events[0]) ? data.events[0] : null;
+            cb(null, retData);
+        }
+    });
+
+}
+
+var getCWLogStream = function getCWLogStream(instanceId, logStreamName, cb) {
+    var dLSParams = {
+        logGroupName: instanceId,
+        /* required */
+        //descending: true || false,
+        //limit: 0,
+        logStreamNamePrefix: logStreamName
+        //nextToken: 'STRING_VALUE',
+        //orderBy: 'LogStreamName | LastEventTime'
+    };
+
+    cloudwatchlogs.describeLogStreams(dLSParams, function (err, data) {
+        //logstream already exists..
+        if (!err) {
+            //since describe only matches prefixes, need to find exact match...
+            let logStream = null;
+            let retData = {};
+            for (let s = 0; s < data.logStreams.length; s++) {
+                if (data.logStreams[s].logStreamName === logFilename) {
+                    retData.exists = true;
+                    retData.logStream = data.logStreams[s];
+                    cb(null, retData);
+                }
+            }
+        } else if (err && err.code === "ResourceNotFoundException") {
+            retData.exists = false;
+            retData.logStream = null;
+            cb(null, retData);
+        } else {
+            cb(err, null);
+        }
+    });
+}
+
+
+var getRDSLogFile = function getRDSLogFile(instanceId, logStream, cb) {
+    var params = {
+        DBInstanceIdentifier: instanceId,
+        /* required */
+        //FileLastWritten: 0,
+        //FileSize: 0,
+        FilenameContains: logStream
+
+        //Filters: [{
+        //        Name: 'STRING_VALUE',
+        //        /* required */
+        //        Values: [ /* required */
+        //            'STRING_VALUE',
+        /* more items */
+        //        ]
+        //    },
+        //    /* more items */
+        //],
+        //Marker: 'STRING_VALUE',
+        //MaxRecords: 0
+    };
+
+
+    rds.describeDBLogFiles(params, function (err, dbData) {
+        if (err) {
+            console.log("Error getting logfile info: " + err, err.stack); // an error occurred 
+        } else {
+            //console.log(data); // successful response
+            for (let m = 0; m < dbData.DescribeDBLogFiles.length; m++) {
+                //log file updated, process updates...
+                if ((dbData.DescribeDBLogFiles[m].LogFileName === logFilename)) {
+                    var retData = {};
+                    retData.dbLog = dbData.DescribeDBLogFiles[m];
+                    return cb(null, retData);
+                }
+            }
+        }
+
+    });
+}
+
 const process_log = {
     "mysql": {
         log: "error/mysql-error.log",
-        parser: function (data, lastEventTimestamp) {
+        runningLog: "error/mysql-error-running.log",
+        checkLog: function (instanceId, logStream, cb) {
+            //get the log file date..
+            getLatestCWEvent(instanceId, logStream, function (err, data) {
+                if (!err) {
+                    let retData = {};
+                    retData.cwTimestamp = (data) ? data.timestamp : 0;
+                    getRDSLogFile(instanceId, logStream, function (err, data) {
+                        if (!err) {
+                            retData.dbLog = data.dbLog;
+                            cb(null, retData);
+                        } else {
+                            cb(err, null);
+                        }
+                    });
+                }
+            });
+        },
+        parser: function (data) {
             //TODO:  add case for currentRunTime >  currentTime % (5 * 60 * 1000) < intervalCheck 
             //log has been updated..
             //console.log("data is: " + JSON.stringify(data));
+
+            let cwTimestamp = data.cwLogLastLine;
+            let dbTimestamp = data.dbLog.LastWritten;
+            console.log("logstream timestamp " + cwTimestamp + ", db timestamp: " + dbTimestamp);
+            if (dbTimestamp > cwTimestamp) {
+                //====TODO==========
+                grabAndStash(instanceId, dbtype, logFilename, logStream, dbData.DescribeDBLogFiles[m], cwTimestamp, function (err, data) {
+                    if (err) {
+                        console.log('Error putting new events in log stream: ' + err, err.stack); // an error occurred
+
+                    } else {
+                        console.log("finished uploading log data for existing stream");
+                    }
+                });
+            }
+
             var loglines = data.LogFileData.split(/\r?\n/);
             var logeventslist = [];
             console.log('Log by lines length is: ' + loglines.length); // successful response
@@ -62,5 +197,8 @@ const process_log = {
 }
 
 module.exports = {
-    process_log
+    process_log,
+    getRDSLogFile,
+    getCWLogStream,
+    getLatestCWEvent
 };

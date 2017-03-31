@@ -45,6 +45,33 @@ rds.describeDBInstances(dbparams, function (err, data) {
                 //orderBy: 'LogStreamName | LastEventTime'
             };
 
+            dblogs.getCWLogStream(instanceId, logFilename, function (err, data) {
+                dblogs.process_log[dbtype].checkLog(instanceId, logFilename, function (err, data) {
+                    if (!err) {
+                        let cwTimestamp = (data.events[0]) ? data.events[0].timestamp : 0;
+                        let dbTimestamp = dbData.DescribeDBLogFiles[m].LastWritten;
+                        console.log("logstream timestamp " + cwTimestamp + ", db timestamp: " + dbTimestamp);
+                        if (dbTimestamp > cwTimestamp) {
+                            grabAndStash(instanceId, dbtype, logFilename, logStream, dbData.DescribeDBLogFiles[m], cwTimestamp, function (err, data) {
+                                if (err) {
+                                    console.log('Error putting new events in log stream: ' + err, err.stack); // an error occurred
+
+                                } else {
+                                    console.log("finished uploading log data for existing stream");
+                                }
+                            });
+                        }
+
+
+                        dblogs.process_log[dbtype].parser(data, function (err, data) {
+
+                        });
+                    } else {
+                        console.log("error checking log" + err, err.stack); // an error occurred
+                    }
+                });
+            });
+
             cloudwatchlogs.describeLogStreams(dLSParams, function (err, data) {
                 //logstream already exists..
                 if (!err) {
@@ -150,7 +177,7 @@ rds.describeDBInstances(dbparams, function (err, data) {
                     console.log('Error getting log stream: ' + err, err.stack); // an error occurred
 
                 }
-            });
+            }); //end snip
         }
     } else {
         console.log('Error retrieving db instances: ' + err, err.stack); // an error occurred

@@ -41,28 +41,13 @@ rds.describeDBInstances(dbparams, function (err, data) {
                 //descending: true || false,
                 //limit: 0,
                 logStreamNamePrefix: logFilename
-                //nextToken: 'STRING_VALUE',
-                //orderBy: 'LogStreamName | LastEventTime'
+                    //nextToken: 'STRING_VALUE',
+                    //orderBy: 'LogStreamName | LastEventTime'
             };
 
             dblogs.getCWLogStream(instanceId, logFilename, function (err, data) {
                 dblogs.process_log[dbtype].checkLog(instanceId, logFilename, function (err, data) {
                     if (!err) {
-                        let cwTimestamp = (data.events[0]) ? data.events[0].timestamp : 0;
-                        let dbTimestamp = dbData.DescribeDBLogFiles[m].LastWritten;
-                        console.log("logstream timestamp " + cwTimestamp + ", db timestamp: " + dbTimestamp);
-                        if (dbTimestamp > cwTimestamp) {
-                            grabAndStash(instanceId, dbtype, logFilename, logStream, dbData.DescribeDBLogFiles[m], cwTimestamp, function (err, data) {
-                                if (err) {
-                                    console.log('Error putting new events in log stream: ' + err, err.stack); // an error occurred
-
-                                } else {
-                                    console.log("finished uploading log data for existing stream");
-                                }
-                            });
-                        }
-
-
                         dblogs.process_log[dbtype].parser(data, function (err, data) {
 
                         });
@@ -119,9 +104,9 @@ rds.describeDBInstances(dbparams, function (err, data) {
                                                 /* required */
                                                 //  endTime: 0,
                                                 limit: 1
-                                                //  nextToken: 'STRING_VALUE',
-                                                //  startFromHead: true || false,
-                                                //  startTime: 0
+                                                    //  nextToken: 'STRING_VALUE',
+                                                    //  startFromHead: true || false,
+                                                    //  startTime: 0
                                             };
 
                                             cloudwatchlogs.getLogEvents(params, function (err, data) {
@@ -192,9 +177,9 @@ function grabAndStash(logGroup, dbType, logStream, logFileData, dbFile, cwTimeSt
         DBInstanceIdentifier: logGroup,
         /* required */
         LogFileName: logStream
-        /* required */
-        //Marker: 'STRING_VALUE',
-        //NumberOfLines: 0
+            /* required */
+            //Marker: 'STRING_VALUE',
+            //NumberOfLines: 0
     };
 
     let uploadSequenceToken = (logFileData) ? logFileData.uploadSequenceToken : undefined;
@@ -240,13 +225,13 @@ function grabAndStash(logGroup, dbType, logStream, logFileData, dbFile, cwTimeSt
 function instrumentLogging(dbInstance, logStream, cb) {
     let cLGParams = {
         logGroupName: dbInstance
-        // required */
-        /*
-        tags: {
-            Logs: 'STRING_VALUE'
-            // anotherKey: ... 
-        }                                    
-        */
+            // required */
+            /*
+            tags: {
+                Logs: 'STRING_VALUE'
+                // anotherKey: ... 
+            }                                    
+            */
     };
 
     cloudwatchlogs.createLogGroup(cLGParams, function (err, data) {

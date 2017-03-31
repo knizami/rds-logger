@@ -17,9 +17,9 @@ var getLatestCWEvent = function getLatestCWEvent(instanceId, logStream, cb) {
         /* required */
         //  endTime: 0,
         limit: 1
-        //  nextToken: 'STRING_VALUE',
-        //  startFromHead: true || false,
-        //  startTime: 0
+            //  nextToken: 'STRING_VALUE',
+            //  startFromHead: true || false,
+            //  startTime: 0
     };
 
     cloudwatchlogs.getLogEvents(params, function (err, data) {
@@ -41,8 +41,8 @@ var getCWLogStream = function getCWLogStream(instanceId, logStreamName, cb) {
         //descending: true || false,
         //limit: 0,
         logStreamNamePrefix: logStreamName
-        //nextToken: 'STRING_VALUE',
-        //orderBy: 'LogStreamName | LastEventTime'
+            //nextToken: 'STRING_VALUE',
+            //orderBy: 'LogStreamName | LastEventTime'
     };
 
     cloudwatchlogs.describeLogStreams(dLSParams, function (err, data) {
@@ -67,6 +67,30 @@ var getCWLogStream = function getCWLogStream(instanceId, logStreamName, cb) {
         }
     });
 }
+
+var downloadRDSLogFile = function downloadRDSLogFile(instanceId, logStreamName, cb) {
+    var downloadLogParams = {
+        DBInstanceIdentifier: instanceId,
+        /* required */
+        LogFileName: logStreamName
+            /* required */
+            //Marker: 'STRING_VALUE',
+            //NumberOfLines: 0
+    };
+
+    console.log('downloading log data for instance: ' + instanceId + "with file: " + logStreamName);
+
+    rds.downloadDBLogFilePortion(downloadLogParams, function (err, data) {
+        if (err) {
+            console.log('error downloading log: ' + err, err.stack); // an error occurred
+            cb(err, null);
+        } else {
+            cb(null, data);
+        }
+    });
+}
+
+
 
 
 var getRDSLogFile = function getRDSLogFile(instanceId, logStream, cb) {
@@ -131,7 +155,7 @@ const process_log = {
                 }
             });
         },
-        parser: function (data) {
+        parser: function (instanceId, logStreamName, data, cb) {
             //TODO:  add case for currentRunTime >  currentTime % (5 * 60 * 1000) < intervalCheck 
             //log has been updated..
             //console.log("data is: " + JSON.stringify(data));
@@ -139,47 +163,41 @@ const process_log = {
             let cwTimestamp = data.cwLogLastLine;
             let dbTimestamp = data.dbLog.LastWritten;
             console.log("logstream timestamp " + cwTimestamp + ", db timestamp: " + dbTimestamp);
+            //if database log file is newer than the last cloudwatch event in log, continue to download database file..
             if (dbTimestamp > cwTimestamp) {
-                //====TODO==========
-                grabAndStash(instanceId, dbtype, logFilename, logStream, dbData.DescribeDBLogFiles[m], cwTimestamp, function (err, data) {
-                    if (err) {
-                        console.log('Error putting new events in log stream: ' + err, err.stack); // an error occurred
+                downloadRDSLogFile(instanceId, logStreamName, function (err, data) {
+                    if (!err) {
+                        var loglines = data.LogFileData.split(/\r?\n/);
+                        var logeventslist = [];
+                        console.log('Log by lines length is: ' + loglines.length); // successful response
+                        for (let ll = 0; ll < loglines.length; ll++) {
+                            if (loglines[ll].length === 0 || loglines[ll].startsWith('Version:'))
+                                continue;
+                            //TODO:  change split to another method to pull timestamp out.
+                            var timestampstr = loglines[ll].substring(0, 20);
+                            var logstr = loglines[ll].substring(22);
+                            var regexp = /\d\d\d\d-\d\d-\d\d \d\d:\d\d:\d\d/g;
+                            var validatedtimestamp = timestampstr.match(regexp);
+                            if (!validatedtimestamp)
+                                throw new Error('error parsing log data in log: ' + log);
 
+                            //timestampstr = timestampstr.concat(dblogs.GMT_OFFSET["us-west-2"]);
+                            var epoch = Date.parse(timestampstr + 'GMT');
+                            console.log('Epoch is: ' + epoch + " and lastEventTimestamp is " + JSON.stringify(lastEventTimestamp));
+                            console.log('Log line of ' + ll + ' string is: ' + logstr + '\n');
+                            if (epoch > lastEventTimestamp) {
+                                logeventslist.push({
+                                    timestamp: epoch,
+                                    message: logstr
+                                });
+                            }
+                        }
                     } else {
-                        console.log("finished uploading log data for existing stream");
+                        cb(err, null);
                     }
+                    console.log("events to push are: " + JSON.stringify(logeventslist));
                 });
             }
-
-            var loglines = data.LogFileData.split(/\r?\n/);
-            var logeventslist = [];
-            console.log('Log by lines length is: ' + loglines.length); // successful response
-            for (let ll = 0; ll < loglines.length; ll++) {
-
-                if (loglines[ll].length === 0 || loglines[ll].startsWith('Version:'))
-                    continue;
-                //TODO:  change split to another method to pull timestamp out.
-                var timestampstr = loglines[ll].substring(0, 20);
-                var logstr = loglines[ll].substring(22);
-                var regexp = /\d\d\d\d-\d\d-\d\d \d\d:\d\d:\d\d/g;
-                var validatedtimestamp = timestampstr.match(regexp);
-                if (!validatedtimestamp)
-                    throw new Error('error parsing log data in log: ' + log);
-
-                //timestampstr = timestampstr.concat(dblogs.GMT_OFFSET["us-west-2"]);
-                var epoch = Date.parse(timestampstr + 'GMT');
-                console.log('Epoch is: ' + epoch + " and lastEventTimestamp is " + JSON.stringify(lastEventTimestamp));
-                console.log('Log line of ' + ll + ' string is: ' + logstr + '\n');
-                if (epoch > lastEventTimestamp) {
-                    logeventslist.push({
-                        timestamp: epoch,
-                        message: logstr
-                    });
-                }
-            }
-
-            console.log("events to push are: " + JSON.stringify(logeventslist));
-            return logeventslist;
         }
     },
     "oracle-ee": {
@@ -200,5 +218,6 @@ module.exports = {
     process_log,
     getRDSLogFile,
     getCWLogStream,
-    getLatestCWEvent
+    getLatestCWEvent,
+    downloadRDSLogFile
 };

@@ -1,4 +1,4 @@
-use strict;
+"use strict";
 
 var AWS = require('aws-sdk');
 var dblogs = require('./utils/dblogfiles');
@@ -7,133 +7,245 @@ var rds = new AWS.RDS({
     region: 'us-west-2'
 });
 
-var dbInstance = 'testlogging';
 var cloudwatchlogs = new AWS.CloudWatchLogs({
     region: 'us-west-2'
 });
 
-var rdstolog = process.argv[2];
+
+//TODO:  read instances to log from some list or other source...
+//TODO:  have switch to allow cloudwatch logging at <5 min user defined threshhold, 5 min intervals (running), or hourly (UTC hourly log capture)
 
 
-var dLGparams = {
-    limit: 10
-        //logGroupNamePrefix: 'STRING_VALUE',
-        //nextToken: 'STRING_VALUE'
-};
+//NOTE:  Timestamp in log will be relative to what timezone the instance is running in.  For cloudwatch logs, must determine timezone of instance and convert to UTC first.
+
+//confirm DB instance exists and determine type...
+var dbparams = {
+
+}
 
 
-//check to see if log group exists for db instance first
-cloudwatchlogs.describeLogGroups(dLGparams, function (err, data) {
-    if (err)
-        console.log(err, err.stack); // an error occurred
-    else {
-        for (let lgnum = 0; lgnum < data.logGroups.length; lgnum++) {
-            console.log('The log group is: ' + data.logGroups[lgnum].logGroupName); // successful response
-            //existing instance log group found
-            if (rdstolog.toLowerCase() === data.logGroups[lgnum].logGroupName) {
-                console.log("found existing log group");
-            }
-            //log group doesn't exist, create it
-            else {
-                console.log("log group " + rdstolog.toLowerCase() + " doesn't exist, creating..");
-                var cLGParams = {
-                    logGroupName: rdstolog.toLowerCase()
-                        // required */
-                        /*
-                        tags: {
-                            Logs: 'STRING_VALUE'
-                            // anotherKey: ... 
-                        }                                    
-                        */
-                };
-                cloudwatchlogs.createLogGroup(cLGParams, function (err, data) {
-                        if (err)
-                            console.log(err, err.stack); // an error occurred                                    
-                        else {
-                            cloudwatchlogs.createLogStream(cLSparams, function (err, data) {
-                                if (err)
-                                    console.log(err, err.stack); // an error occurred
-                                else {
-                                    console.log(data); // successful response
-                                }
+rds.describeDBInstances(dbparams, function (err, data) {
+    //db instance exists..
+    if (!err) {
+        //try to create log group, or use existing one in exception..
+        //iterate through all db instances
+        for (let n = 0; n < data.DBInstances.length; n++) {
+            let dbtype = data.DBInstances[n].Engine;
+            //console.log('db type is: ' + dbtype);
+            let logFilename = dblogs.process_log[dbtype].log;
+            let instanceId = data.DBInstances[n].DBInstanceIdentifier;
+
+            var dLSParams = {
+                logGroupName: instanceId,
+                /* required */
+                //descending: true || false,
+                //limit: 0,
+                logStreamNamePrefix: logFilename
+                //nextToken: 'STRING_VALUE',
+                //orderBy: 'LogStreamName | LastEventTime'
+            };
+
+            cloudwatchlogs.describeLogStreams(dLSParams, function (err, data) {
+                //logstream already exists..
+                if (!err) {
+                    //since describe only matches prefixes, need to find exact match...
+                    for (let s = 0; s < data.logStreams.length; s++) {
+
+                        if (data.logStreams[s].logStreamName === logFilename) {
+
+                            var params = {
+                                DBInstanceIdentifier: instanceId,
+                                /* required */
+                                //FileLastWritten: 0,
+                                //FileSize: 0,
+                                FilenameContains: logFilename
+
+                                //Filters: [{
+                                //        Name: 'STRING_VALUE',
+                                //        /* required */
+                                //        Values: [ /* required */
+                                //            'STRING_VALUE',
+                                /* more items */
+                                //        ]
+                                //    },
+                                //    /* more items */
+                                //],
+                                //Marker: 'STRING_VALUE',
+                                //MaxRecords: 0
+                            };
+                            let logStream = data.logStreams[s];
+                            console.log(logStream.logStreamName + "  timestamp: " + logStream.lastEventTimestamp);
 
 
-                                //get log files for instance
-                                var dDBLFParams = {
-                                    DBInstanceIdentifier: dbInstance /* required */
-                                        //  FileLastWritten: 0,
-                                        //  FileSize: 0,
-                                        //  FilenameContains: 'STRING_VALUE',
-                                        //  Filters: [
-                                        //    {
-                                        //      Name: 'STRING_VALUE', /* required */
-                                        //      Values: [ /* required */
-                                        //        'STRING_VALUE',
-                                        /* more items */
-                                        //      ]
-                                        //    },
-                                        /* more items */
-                                        //  ],
-                                        //  Marker: 'STRING_VALUE',
-                                        //  MaxRecords: 0
-                                };
-
-                                rds.describeDBLogFiles(dDBLFParams, function (err, data) {
-                                    if (err)
-                                        console.log(err, err.stack); // an error occurred
-                                    else {
-                                        console.log('Listing Log Files:');
-                                        for (let lfnum = 0; lfnum < data.DescribeDBLogFiles.length; lfnum++) {
-
-                                            console.log('Log file ' + lfnum + ": " + data.DescribeDBLogFiles[lfnum].LogFileName)
-
-                                            var dDLFPParams = {
-                                                DBInstanceIdentifier: dbInstance,
+                            rds.describeDBLogFiles(params, function (err, dbData) {
+                                if (err) {
+                                    console.log("Error getting logfile info: " + err, err.stack); // an error occurred 
+                                } else {
+                                    //console.log(data); // successful response
+                                    for (let m = 0; m < dbData.DescribeDBLogFiles.length; m++) {
+                                        //log file updated, process updates...
+                                        if ((dbData.DescribeDBLogFiles[m].LogFileName === logFilename)) {
+                                            var params = {
+                                                logGroupName: instanceId,
                                                 /* required */
-                                                LogFileName: dblogs.error_logs['mysql']
-                                                    /* required */
-                                                    //Marker: '18:224',
-                                                    //NumberOfLines: 3
+                                                logStreamName: logFilename,
+                                                /* required */
+                                                //  endTime: 0,
+                                                limit: 1
+                                                //  nextToken: 'STRING_VALUE',
+                                                //  startFromHead: true || false,
+                                                //  startTime: 0
                                             };
 
-                                            var currentLogFile = data.DescribeDBLogFiles[ln].LogFileName;
-                                            //TODO:  Check timestamp of log and compare to last timestamp, only process if newer..
-                                            rds.downloadDBLogFilePortion(dDLFPParams, function (err, data) {
-                                                if (err)
-                                                    console.log(err, err.stack); // an error occurred
-                                                else {
-                                                    console.log('Log data is: ' + data.LogFileData + ' and the marker is ' + data.Marker); // successful response
-                                                    loglines = data.LogFileData.split("\\n");
-                                                    for (let ll = 0; ll < loglines.length; ll++) {
-                                                        //TODO:  change split to another method to pull timestamp out.
-                                                        timestampstr = loglines[ll].substring(0, 20);
-                                                        logstr = loglines[ll].substring(22);
-                                                        regexp = /\d\d\d\d-\d\d-\d\d \d\d:\d\d:\d\d/U
-                                                        validatedtimeestamp = timestampstr.match(regexp);
-                                                        if (!validatedtimestamp)
-                                                            throw new Error('error parsing log data');
-                                                        epoch = Date.parse(timestampstr);
-                                                        console.log('Epoch is: ' + epoch);
+                                            cloudwatchlogs.getLogEvents(params, function (err, data) {
+                                                if (err) {
+                                                    console.log("error getting latest event" + err, err.stack); // an error occurred
+                                                } else {
+                                                    let cwTimestamp = (data.events[0]) ? data.events[0].timestamp : 0;
+                                                    let dbTimestamp = dbData.DescribeDBLogFiles[m].LastWritten;
+                                                    console.log("logstream timestamp " + cwTimestamp + ", db timestamp: " + dbTimestamp);
+                                                    if (dbTimestamp > cwTimestamp) {
+                                                        grabAndStash(instanceId, dbtype, logFilename, logStream, dbData.DescribeDBLogFiles[m], cwTimestamp, function (err, data) {
+                                                            if (err) {
+                                                                console.log('Error putting new events in log stream: ' + err, err.stack); // an error occurred
 
-                                                        var cLSparams = {
-                                                            logGroupName: cLGparams.logGroupName,
-                                                            /* required */
-                                                            logStreamName: currentLogFile /* required */
-                                                        };
+                                                            } else {
+                                                                console.log("finished uploading log data for existing stream");
+                                                            }
+                                                        });
                                                     }
+
                                                 }
                                             });
-                                            console.log(data); // successful response
+                                        } else if (dbData.DescribeDBLogFiles[m].LogFileName === logFilename) {
+                                            console.log(instanceId + ": no update to log detected..");
 
                                         }
-                                        //get logs from RDS instance
-                                    }
-                                });
-                            }); //end create log stream
-                        }
 
+
+                                    }
+
+                                }
+                            });
+                        }
                     }
+                    //need to create stream and log group first...
+                } else if (err && err.code === "ResourceNotFoundException") {
+                    console.log("creating new log group and stream for: " + instanceId);
+
+                    //log stream doesn't exist yet, create it first...
+                    instrumentLogging(instanceId, logFilename, function (err, data) {
+                        grabAndStash(instanceId, dbtype, logFilename, null, null, 0, function (err, data) {
+                            if (err) {
+                                console.log('Error putting new events in log stream: ' + err, err.stack); // an error occurred
+
+                            } else {
+                                console.log("finished uploading log data for new stream");
+                            }
+                        });
+
+                    });
+                    //console.log(err, err.stack); // an error occurred
+                } else {
+                    console.log('Error getting log stream: ' + err, err.stack); // an error occurred
+
                 }
             });
+        }
+    } else {
+        console.log('Error retrieving db instances: ' + err, err.stack); // an error occurred
+
     }
 });
+
+
+
+function grabAndStash(logGroup, dbType, logStream, logFileData, dbFile, cwTimeStamp, cb) {
+    var downloadLogParams = {
+        DBInstanceIdentifier: logGroup,
+        /* required */
+        LogFileName: logStream
+        /* required */
+        //Marker: 'STRING_VALUE',
+        //NumberOfLines: 0
+    };
+
+    let uploadSequenceToken = (logFileData) ? logFileData.uploadSequenceToken : undefined;
+
+
+    console.log('processing log data for instance: ' + logGroup + "with lastEventTimestamp: " + cwTimeStamp);
+
+    rds.downloadDBLogFilePortion(downloadLogParams, function (err, data) {
+        if (err)
+            console.log('error downloading log: ' + err, err.stack); // an error occurred
+        else {
+            let logeventslist = dblogs.process_log[dbType].parser(data, cwTimeStamp);
+
+            if (logeventslist && logeventslist.length > 0) {
+                let uploadToken = data.uploadToken;
+                var params = {
+                    logEvents: logeventslist,
+                    logGroupName: logGroup,
+                    /* required */
+                    logStreamName: logStream,
+                    /* required */
+                    //will be undefined for newly created stream..
+                    sequenceToken: uploadSequenceToken
+                };
+                console.log("uploading with sequence token: " + uploadSequenceToken);
+                cloudwatchlogs.putLogEvents(params, function (err, data) {
+                    if (err) {
+                        console.log("error placing events: " + JSON.stringify(err));
+                        cb(err, null); // an error occurred                        
+                    } else {
+                        //successfully placed log data..    
+                        console.log('data placed: ' + JSON.stringify(data)); // successful response
+                        //tag logstream with next sequence #
+                        cb(null, data);
+                    }
+                });
+            }
+        }
+    });
+
+};
+
+function instrumentLogging(dbInstance, logStream, cb) {
+    let cLGParams = {
+        logGroupName: dbInstance
+        // required */
+        /*
+        tags: {
+            Logs: 'STRING_VALUE'
+            // anotherKey: ... 
+        }                                    
+        */
+    };
+
+    cloudwatchlogs.createLogGroup(cLGParams, function (err, data) {
+        if (!err) {
+            var params = {
+                logGroupName: dbInstance,
+                /* required */
+                logStreamName: logStream /* required */
+            };
+            //try to create log stream or reuse one in exception...
+            cloudwatchlogs.createLogStream(params, function (err, data) {
+                // new log stream created...
+                if (!err) {
+                    cb(null, data);
+                } else {
+                    //log group and log stream already exists..
+                    cb(err, null);
+                }
+            });
+        } else {
+            //log group already exists...
+            cb(err, null);
+        }
+    });
+}
+
+
+
+//==================================

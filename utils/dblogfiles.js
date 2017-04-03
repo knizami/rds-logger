@@ -9,6 +9,43 @@ var rds = new AWS.RDS({
 //NOTE:  Its possible that filenames would change from version to version of DB
 //TODO:  validation code that log files for a given db type / version are correct
 
+var instrumentLogging = function instrumentLogging(dbInstance, logStream, cb) {
+    let cLGParams = {
+        logGroupName: dbInstance
+        // required */
+        /*
+        tags: {
+            Logs: 'STRING_VALUE'
+            // anotherKey: ... 
+        }                                    
+        */
+    };
+
+    cloudwatchlogs.createLogGroup(cLGParams, function (err, data) {
+        if (!err) {
+            var params = {
+                logGroupName: dbInstance,
+                /* required */
+                logStreamName: logStream /* required */
+            };
+            //try to create log stream or reuse one in exception...
+            cloudwatchlogs.createLogStream(params, function (err, data) {
+                // new log stream created...
+                if (!err) {
+                    cb(null, data);
+                } else {
+                    //log group and log stream already exists..
+                    cb(err, null);
+                }
+            });
+        } else {
+            //log group already exists...
+            cb(err, null);
+        }
+    });
+}
+
+
 var getLatestCWEvent = function getLatestCWEvent(instanceId, logStream, cb) {
     var params = {
         logGroupName: instanceId,
@@ -17,9 +54,9 @@ var getLatestCWEvent = function getLatestCWEvent(instanceId, logStream, cb) {
         /* required */
         //  endTime: 0,
         limit: 1
-            //  nextToken: 'STRING_VALUE',
-            //  startFromHead: true || false,
-            //  startTime: 0
+        //  nextToken: 'STRING_VALUE',
+        //  startFromHead: true || false,
+        //  startTime: 0
     };
 
     cloudwatchlogs.getLogEvents(params, function (err, data) {
@@ -41,8 +78,8 @@ var getCWLogStream = function getCWLogStream(instanceId, logStreamName, cb) {
         //descending: true || false,
         //limit: 0,
         logStreamNamePrefix: logStreamName
-            //nextToken: 'STRING_VALUE',
-            //orderBy: 'LogStreamName | LastEventTime'
+        //nextToken: 'STRING_VALUE',
+        //orderBy: 'LogStreamName | LastEventTime'
     };
 
     cloudwatchlogs.describeLogStreams(dLSParams, function (err, data) {
@@ -73,9 +110,9 @@ var downloadRDSLogFile = function downloadRDSLogFile(instanceId, logStreamName, 
         DBInstanceIdentifier: instanceId,
         /* required */
         LogFileName: logStreamName
-            /* required */
-            //Marker: 'STRING_VALUE',
-            //NumberOfLines: 0
+        /* required */
+        //Marker: 'STRING_VALUE',
+        //NumberOfLines: 0
     };
 
     console.log('downloading log data for instance: ' + instanceId + "with file: " + logStreamName);
@@ -91,7 +128,29 @@ var downloadRDSLogFile = function downloadRDSLogFile(instanceId, logStreamName, 
 }
 
 
-
+var putCWLogEvents = function (instanceId, logStreamName, logEvents, sequenceToken, cb) {
+    var params = {
+        logEvents: logEvents,
+        logGroupName: instanceId,
+        /* required */
+        logStreamName: logStreamName,
+        /* required */
+        //will be undefined for newly created stream..
+        sequenceToken: sequenceToken
+    };
+    console.log("uploading with sequence token: " + sequenceToken);
+    cloudwatchlogs.putLogEvents(params, function (err, data) {
+        if (err) {
+            console.log("error placing events: " + JSON.stringify(err));
+            cb(err, null); // an error occurred                        
+        } else {
+            //successfully placed log data..    
+            console.log("data placed data for : " + instanceId + " and file " + logStreamName); // successful response
+            //tag logstream with next sequence #
+            cb(null, data);
+        }
+    });
+}
 
 var getRDSLogFile = function getRDSLogFile(instanceId, logStream, cb) {
     var params = {
@@ -192,10 +251,11 @@ const process_log = {
                                 });
                             }
                         }
+                        console.log("events to push are: " + JSON.stringify(logeventslist));
+                        cb(null, logeventslist);
                     } else {
                         cb(err, null);
                     }
-                    console.log("events to push are: " + JSON.stringify(logeventslist));
                 });
             }
         }
@@ -219,5 +279,7 @@ module.exports = {
     getRDSLogFile,
     getCWLogStream,
     getLatestCWEvent,
-    downloadRDSLogFile
+    downloadRDSLogFile,
+    putCWLogEvents,
+    instrumentLogging
 };

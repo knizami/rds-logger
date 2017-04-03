@@ -41,20 +41,31 @@ rds.describeDBInstances(dbparams, function (err, data) {
                 //descending: true || false,
                 //limit: 0,
                 logStreamNamePrefix: logFilename
-                    //nextToken: 'STRING_VALUE',
-                    //orderBy: 'LogStreamName | LastEventTime'
+                //nextToken: 'STRING_VALUE',
+                //orderBy: 'LogStreamName | LastEventTime'
             };
 
-            dblogs.getCWLogStream(instanceId, logFilename, function (err, data) {
-                dblogs.process_log[dbtype].checkLog(instanceId, logFilename, function (err, data) {
-                    if (!err) {
+            dblogs.getCWLogStream(instanceId, logFilename, function (err, CWLogStreamData) {
+                if (CWLogStreamData.exists) {
+                    dblogs.process_log[dbtype].checkLog(instanceId, logFilename, function (err, data) {
+                        if (!err) {
+                            dblogs.process_log[dbtype].parser(data, function (err, data) {
+                                dblogs.putCWLogEvents(instanceId, logFilename, data, CWLogStreamData)
+                            });
+                        } else {
+                            console.log("error checking log" + err, err.stack); // an error occurred
+                        }
+                    });
+                } else {
+                    dblogs.instrumentLogging(instanceId, logFilename, function (err, data) {
                         dblogs.process_log[dbtype].parser(data, function (err, data) {
 
                         });
-                    } else {
-                        console.log("error checking log" + err, err.stack); // an error occurred
-                    }
-                });
+
+
+                    });
+
+                }
             });
 
             cloudwatchlogs.describeLogStreams(dLSParams, function (err, data) {
@@ -104,9 +115,9 @@ rds.describeDBInstances(dbparams, function (err, data) {
                                                 /* required */
                                                 //  endTime: 0,
                                                 limit: 1
-                                                    //  nextToken: 'STRING_VALUE',
-                                                    //  startFromHead: true || false,
-                                                    //  startTime: 0
+                                                //  nextToken: 'STRING_VALUE',
+                                                //  startFromHead: true || false,
+                                                //  startTime: 0
                                             };
 
                                             cloudwatchlogs.getLogEvents(params, function (err, data) {
@@ -177,9 +188,9 @@ function grabAndStash(logGroup, dbType, logStream, logFileData, dbFile, cwTimeSt
         DBInstanceIdentifier: logGroup,
         /* required */
         LogFileName: logStream
-            /* required */
-            //Marker: 'STRING_VALUE',
-            //NumberOfLines: 0
+        /* required */
+        //Marker: 'STRING_VALUE',
+        //NumberOfLines: 0
     };
 
     let uploadSequenceToken = (logFileData) ? logFileData.uploadSequenceToken : undefined;
@@ -195,68 +206,12 @@ function grabAndStash(logGroup, dbType, logStream, logFileData, dbFile, cwTimeSt
 
             if (logeventslist && logeventslist.length > 0) {
                 let uploadToken = data.uploadToken;
-                var params = {
-                    logEvents: logeventslist,
-                    logGroupName: logGroup,
-                    /* required */
-                    logStreamName: logStream,
-                    /* required */
-                    //will be undefined for newly created stream..
-                    sequenceToken: uploadSequenceToken
-                };
-                console.log("uploading with sequence token: " + uploadSequenceToken);
-                cloudwatchlogs.putLogEvents(params, function (err, data) {
-                    if (err) {
-                        console.log("error placing events: " + JSON.stringify(err));
-                        cb(err, null); // an error occurred                        
-                    } else {
-                        //successfully placed log data..    
-                        console.log('data placed: ' + JSON.stringify(data)); // successful response
-                        //tag logstream with next sequence #
-                        cb(null, data);
-                    }
-                });
             }
         }
     });
 
 };
 
-function instrumentLogging(dbInstance, logStream, cb) {
-    let cLGParams = {
-        logGroupName: dbInstance
-            // required */
-            /*
-            tags: {
-                Logs: 'STRING_VALUE'
-                // anotherKey: ... 
-            }                                    
-            */
-    };
-
-    cloudwatchlogs.createLogGroup(cLGParams, function (err, data) {
-        if (!err) {
-            var params = {
-                logGroupName: dbInstance,
-                /* required */
-                logStreamName: logStream /* required */
-            };
-            //try to create log stream or reuse one in exception...
-            cloudwatchlogs.createLogStream(params, function (err, data) {
-                // new log stream created...
-                if (!err) {
-                    cb(null, data);
-                } else {
-                    //log group and log stream already exists..
-                    cb(err, null);
-                }
-            });
-        } else {
-            //log group already exists...
-            cb(err, null);
-        }
-    });
-}
 
 
 

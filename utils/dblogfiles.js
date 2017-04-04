@@ -442,7 +442,7 @@ const log = {
                     retData.cwTimestamp = (data) ? data.timestamp : 0;
                     var currDate = new Date(Date.now());
                     var currDateString = currDate.getUTCFullYear() + "-" + currDate.getUTCMonth() + "-" + currDate.getUTCDay() + "-" + currDate.getUTCHours();
-                    var logFileName = logStreamName.concat(currDateString);
+                    var logFileName = logStreamName.concat("." + currDateString);
                     getRDSLogFile(instanceId, logFileName, function (err, data) {
                         if (!err) {
                             retData.dbLog = data.dbLog;

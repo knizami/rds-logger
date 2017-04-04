@@ -1,3 +1,12 @@
+/**
+ * Author:    Khurram Nizami (nizamik@amazon.com)
+ * Created:   2017.04.03
+ * Description:
+ *   Iterate through all RDS instances and parse each error log, putting each into an existing / new log group with the RDS instance name.
+ *   Additionally, a logstream with the same name as the log file is created in the log group.  
+ *   By using Cloudwatch Logs you can maintain long living error logs, search, and view logs by date range...
+ * 
+ **/
 "use strict";
 
 var AWS = require('aws-sdk');
@@ -32,8 +41,8 @@ rds.describeDBInstances(dbparams, function (err, data) {
                 //descending: true || false,
                 //limit: 0,
                 logStreamNamePrefix: logFilename
-                    //nextToken: 'STRING_VALUE',
-                    //orderBy: 'LogStreamName | LastEventTime'
+                //nextToken: 'STRING_VALUE',
+                //orderBy: 'LogStreamName | LastEventTime'
             };
             if (dbtype === "mysql")
                 dblogs.getCWLogStream(instanceId, dbtype, function (err, CWLogStreamData) {

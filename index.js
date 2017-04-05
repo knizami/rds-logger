@@ -35,28 +35,51 @@ rds.describeDBInstances(dbparams, function (err, data) {
             let logFilename = dblogs.log[dbtype].log;
             let instanceId = data.DBInstances[n].DBInstanceIdentifier;
 
-            var dLSParams = {
-                logGroupName: instanceId,
-                /* required */
-                //descending: true || false,
-                //limit: 0,
-                logStreamNamePrefix: logFilename
-                //nextToken: 'STRING_VALUE',
-                //orderBy: 'LogStreamName | LastEventTime'
-            };
-            if (dbtype === "mysql")
-                dblogs.getCWLogStream(instanceId, dbtype, function (err, CWLogStreamData) {
-                    if (CWLogStreamData.exists) {
-                        dblogs.log[dbtype].checkLog(instanceId, CWLogStreamData.logStream.logStreamName, function (err, data) {
+            dblogs.getCWLogStream(instanceId, dbtype, function (err, CWLogStreamData) {
+                if (CWLogStreamData.exists) {
+                    console.log("dbtype is: " + dbtype);
+                    dblogs.log[dbtype].checkLog(dbtype, instanceId, function (err, data) {
+                        if (!err) {
+                            dblogs.log[dbtype].processLog(dbtype, instanceId, data, function (err, data) {
+                                if (!err && data) {
+                                    console.log("using sequence token: " + CWLogStreamData.logStream.uploadSequenceToken);
+                                    dblogs.putCWLogEvents(instanceId, data, CWLogStreamData.logStream, function (err, data) {
+                                        if (!err) {
+                                            console.log("finished processing & placing events for: " + instanceId);
+                                        } else {
+                                            console.log("error placing events for: " + instanceId);
+                                        }
+                                    });
+                                } else if (!data) {
+                                    console.log("no data to process for: " + instanceId);
+                                } else {
+                                    console.log("error processing log: " + err, err.stack); // an error occurred
+                                }
+
+                            });
+                        } else {
+                            console.log("error checking log: " + err, err.stack); // an error occurred
+                        }
+                    });
+                } else {
+                    dblogs.instrumentLogging(instanceId, dbtype, function (err, data) {
+                        dblogs.log[dbtype].checkLog(dbtype, instanceId, function (err, data) {
                             if (!err) {
-                                dblogs.log[dbtype].processLog(dbtype, instanceId, CWLogStreamData.logStream.logStreamName, data, function (err, data) {
+                                console.log("processing log for: " + dbtype);
+                                dblogs.log[dbtype].processLog(dbtype, instanceId, data, function (err, data) {
                                     if (!err && data) {
-                                        console.log("using sequence token: " + CWLogStreamData.logStream.uploadSequenceToken);
-                                        dblogs.putCWLogEvents(instanceId, data, CWLogStreamData.logStream, function (err, data) {
+                                        dblogs.getCWLogStream(instanceId, dbtype, function (err, CWLogStreamData) {
                                             if (!err) {
-                                                console.log("finished processing & placing events for: " + instanceId);
+                                                dblogs.putCWLogEvents(instanceId, data, CWLogStreamData, function (err, data) {
+                                                    if (!err) {
+                                                        console.log("finished processing & placing events for: " + instanceId);
+                                                    } else {
+                                                        console.log("error placing events for: " + instanceId);
+                                                    }
+                                                });
+
                                             } else {
-                                                console.log("error placing events for: " + instanceId);
+                                                console.log("Error getting newly created logStream for instance: " + instanceId);
                                             }
                                         });
                                     } else if (!data) {
@@ -70,33 +93,9 @@ rds.describeDBInstances(dbparams, function (err, data) {
                                 console.log("error checking log: " + err, err.stack); // an error occurred
                             }
                         });
-                    } else {
-                        dblogs.instrumentLogging(instanceId, dbtype, function (err, data) {
-                            dblogs.log[dbtype].checkLog(instanceId, logFilename, function (err, data) {
-                                if (!err) {
-                                    dblogs.log[dbtype].processLog(dbtype, instanceId, logFilename, data, function (err, data) {
-                                        if (!err && data) {
-                                            dblogs.putCWLogEvents(instanceId, logFilename, data, CWLogStreamData.logStream.uploadSequenceToken, function (err, data) {
-                                                if (!err) {
-                                                    console.log("finished processing & placing events for: " + instanceId);
-                                                } else {
-                                                    console.log("error placing events for: " + instanceId);
-                                                }
-                                            });
-                                        } else if (!data) {
-                                            console.log("no data to process for: " + instanceId);
-                                        } else {
-                                            console.log("error processing log: " + err, err.stack); // an error occurred
-                                        }
-
-                                    });
-                                } else {
-                                    console.log("error checking log: " + err, err.stack); // an error occurred
-                                }
-                            });
-                        });
-                    }
-                });
+                    });
+                }
+            });
         }
     } else {
         console.log('Error retrieving db instances: ' + err, err.stack); // an error occurred

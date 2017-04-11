@@ -382,14 +382,10 @@ const log = {
     //Sample line:
     //2017-04-10 20:47:38.49 Server      UTC adjustment: 0:00
     "sqlserver-ex": {
-        log: function (timeInMs) {
-            if (!timeInMs)
-                timeInMs = Date.now();
-            var currDate = new Date(timeInMs);
-            var currHour = (currDate.getUTCHours() < 10) ? "0" + currDate.getUTCHours() : currDate.getUTCHours();
-            return "error/postgresql.log." + currDate.toISOString().substr(0, 10) + "-" + currHour;
+        log: function () {
+            return "log/ERROR"
         },
-        stream: "error/postgresql.log",
+        stream: "log/ERROR",
         checkLog: function (dbType, instanceId, cb) {
             //get the log file date..            
             getLatestCWEvent(instanceId, log[dbType].stream, function (err, data) {
@@ -417,27 +413,29 @@ const log = {
             var loglines = LogFileData.split(/\r?\n/);
             var logeventslist = [];
             console.log('Log by lines length is: ' + loglines.length); // successful response
+            loglines[0] = (loglines[0].startsWith('??')) ? loglines[0].substring(2) : loglines[0];
             for (let ll = 0; ll < loglines.length; ll++) {
-                if (loglines[ll].length === 0 || loglines[ll].startsWith('Version:'))
+                if (loglines[ll].length === 0)
                     continue;
 
-                var timestampstr = loglines[ll].substring(0, 20);
-                var logstr = loglines[ll].substring(27);
+                var timestampstr = loglines[ll].substring(0, 19);
                 var regexp = /\d\d\d\d-\d\d-\d\d \d\d:\d\d:\d\d/g;
                 var validatedtimestamp = timestampstr.match(regexp);
-                if (!validatedtimestamp)
-                    throw new Error('error parsing log data in log: ' + log);
-
-                //timestampstr = timestampstr.concat(dblogs.GMT_OFFSET["us-west-2"]);
-                var epoch = Date.parse(timestampstr + 'GMT');
-
-                console.log('Epoch is: ' + epoch + " and lastEventTimestamp is " + cwTimestamp);
-                console.log('Log line of ' + ll + ' string is: ' + logstr + '\n');
-                if (epoch > cwTimestamp) {
-                    logeventslist.push({
-                        timestamp: epoch,
-                        message: logstr
-                    });
+                if (validatedtimestamp) {
+                    var logstr = loglines[ll].substring(23);
+                    var epoch = Date.parse(timestampstr + ' GMT');
+                    while (!(typeof loglines[(ll + 1)] === "undefined") && !loglines[(ll + 1)].match(regexp)) {
+                        ll++;
+                        logstr = logstr.concat('\n' + loglines[ll]);
+                    }
+                    console.log("parsed string is: " + logstr);
+                    if (epoch > cwTimestamp) {
+                        logeventslist.push({
+                            timestamp: epoch,
+                            message: logstr
+                        });
+                    }
+                    console.log('Epoch is: ' + epoch + " and string is " + logstr);
                 }
             }
             return logeventslist;
@@ -454,7 +452,7 @@ const log = {
             //if database log file is newer than the last cloudwatch event in log, continue to download database file..
             if ((dbTimestamp > cwTimestamp) && (data.dbLog.Size > 0)) {
                 //currentRunTime >  currentTime % (5 * 60 * 1000) < intervalCheck                
-                //oracle rotates logs daily.  If the executionTime is < intervalCheck on rotation time then need to check the previous days logs to make sure no events are missed...
+                //SQL Server rotates logs on reboot
                 var executionTime = new Date(Date.now());
                 //get the previous hours logstream if within threshhold and process the log..
                 //TODO avoid processing by checking timestamp on log file to see if its updated within threshhold...
@@ -501,13 +499,13 @@ const log = {
 function instrumentLogging(dbInstance, dbType, cb) {
     let cLGParams = {
         logGroupName: LOG_GROUP_PREFIX + dbInstance
-            // required */
-            /*
-            tags: {
-                Logs: 'STRING_VALUE'
-                // anotherKey: ... 
-            }                                    
-            */
+        // required */
+        /*
+        tags: {
+            Logs: 'STRING_VALUE'
+            // anotherKey: ... 
+        }                                    
+        */
     };
 
     cloudwatchlogs.createLogGroup(cLGParams, function (err, data) {
@@ -565,9 +563,9 @@ function getLatestCWEvent(instanceId, logStream, cb) {
         /* required */
         //  endTime: 0,
         limit: 1
-            //  nextToken: 'STRING_VALUE',
-            //  startFromHead: true || false,
-            //  startTime: 0
+        //  nextToken: 'STRING_VALUE',
+        //  startFromHead: true || false,
+        //  startTime: 0
     };
 
     cloudwatchlogs.getLogEvents(params, function (err, data) {
@@ -594,8 +592,8 @@ function getCWLogStream(instanceId, dbType, cb) {
         //descending: true || false,
         //limit: 0,
         logStreamNamePrefix: logStreamName
-            //nextToken: 'STRING_VALUE',
-            //orderBy: 'LogStreamName | LastEventTime'
+        //nextToken: 'STRING_VALUE',
+        //orderBy: 'LogStreamName | LastEventTime'
     };
 
     cloudwatchlogs.describeLogStreams(dLSParams, function (err, data) {
@@ -628,9 +626,9 @@ function downloadRDSLogFile(instanceId, logStreamName, cb) {
         DBInstanceIdentifier: instanceId,
         /* required */
         LogFileName: logStreamName
-            /* required */
-            //Marker: 'STRING_VALUE',
-            //NumberOfLines: 0
+        /* required */
+        //Marker: 'STRING_VALUE',
+        //NumberOfLines: 0
     };
 
     console.log('downloading log data for instance: ' + instanceId + "with file: " + logStreamName);

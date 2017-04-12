@@ -57,10 +57,77 @@ var log = {
                 }
             });
         },
+        processLog: function (dbType, instanceId, data, cb) {
+            //hardcoded for now, not known if possible to retrieve cloudwatch event lambda interval...
+            var mySqlRotationInterval = 5 * 60 * 1000;
+            var mySqlHourlyRotationInterval = 60 * 60 * 1000;
+            //log has been updated..
+            //console.log("data is: " + JSON.stringify(data));
+
+            let cwTimestamp = data.cwTimestamp;
+            let dbTimestamp = data.dbLog.LastWritten;
+            //console.log("logstream timestamp " + cwTimestamp + ", db timestamp: " + dbTimestamp);
+            //if database log file is newer than the last cloudwatch event in log, continue to download database file..
+            if ((dbTimestamp > cwTimestamp)) {
+                //currentRunTime >  currentTime % (5 * 60 * 1000) < intervalCheck                
+                //mysql rotates logs every 5 mins and hourly, if the time is within time of file rotation, must check flushed log to see if any events happened in between interval checks and got flushed...
+                var executionTime = Date.now();
+                //console.log("remainder is: " + (executionTime % mySqlHourlyRotationInterval) + ", intervalInMs: " + intervalInMs);
+                //console.log("remainder is: " + (executionTime % mySqlRotationInterval) + ", intervalInMs: " + intervalInMs);
+
+                var appendRotationLogEvents = ((executionTime % mySqlHourlyRotationInterval) < intervalInMs) ? (log[dbType].runningLog + '.' + new Date(executionTime - intervalInMs).getUTCHours()) : false;
+
+                if (!appendRotationLogEvents)
+                    appendRotationLogEvents = ((executionTime % mySqlRotationInterval) < intervalInMs) ? log[dbType].runningLog : false;
+
+                if (appendRotationLogEvents) {
+                    console.log("processing running log as well for " + instanceId + " since execution time < last file rotation..");
+                    downloadRDSLogFile(instanceId, appendRotationLogEvents, function (err, previousIntervalLog) {
+                        if (!err) {
+                            var runningEventsList = log[dbType].parser(previousIntervalLog.LogFileData, cwTimestamp);
+                            if (data.dbLog.Size > 0)
+                                downloadRDSLogFile(instanceId, log[dbType].log(), function (err, data) {
+                                    if (!err) {
+                                        var eventsList = log[dbType].parser(data.LogFileData, cwTimestamp);
+                                        runningEventsList.concat(eventsList);
+                                        //console.log("events to push are: " + JSON.stringify(eventsList));
+                                        if (runningEventsList.length > 0)
+                                            cb(null, runningEventsList);
+                                        else
+                                            cb(null, null);
+                                    } else {
+                                        cb(err, null);
+                                    }
+                                });
+                        } else {
+                            console.log("Error downloading previous interval file: " + appendRotationLogEvents + ":" + err);
+                            cb(err, null);
+                        }
+                    });
+                } else if (data.dbLog.Size > 0) {
+                    downloadRDSLogFile(instanceId, log[dbType].log(), function (err, data) {
+                        if (!err) {
+                            var eventsList = log[dbType].parser(data.LogFileData, cwTimestamp);
+                            //console.log("events to push are: " + JSON.stringify(eventsList));
+                            if (eventsList.length > 0)
+                                cb(null, eventsList);
+                            else
+                                cb(null, null);
+                        } else {
+                            cb(err, null);
+                        }
+                    });
+                }
+
+
+            } else {
+                cb(null, null);
+            }
+        },
         parser: function (LogFileData, cwTimestamp) {
             var loglines = LogFileData.split(/\r?\n/);
             var logeventslist = [];
-            console.log('Log by lines length is: ' + loglines.length); // successful response
+            //console.log('Log by lines length is: ' + loglines.length); // successful response
             for (let ll = 0; ll < loglines.length; ll++) {
                 if (loglines[ll].length === 0 || loglines[ll].startsWith('Version:'))
                     continue;
@@ -75,8 +142,8 @@ var log = {
                 //timestampstr = timestampstr.concat(dblogs.GMT_OFFSET["us-west-2"]);
                 var epoch = Date.parse(timestampstr + 'GMT');
 
-                console.log('Epoch is: ' + epoch + " and lastEventTimestamp is " + cwTimestamp);
-                console.log('Log line of ' + ll + ' string is: ' + logstr + '\n');
+                //console.log('Epoch is: ' + epoch + " and lastEventTimestamp is " + cwTimestamp);
+                //console.log('Log line of ' + ll + ' string is: ' + logstr + '\n');
                 if (epoch > cwTimestamp) {
                     logeventslist.push({
                         timestamp: epoch,
@@ -85,68 +152,8 @@ var log = {
                 }
             }
             return logeventslist;
-        },
-        processLog: function (dbType, instanceId, data, cb) {
-            //hardcoded for now, not known if possible to retrieve cloudwatch event lambda interval...
-            var mySqlRotationInterval = 5 * 60 * 1000;
-            var mySqlHourlyRotationInterval = 60 * 60 * 1000;
-            //log has been updated..
-            console.log("data is: " + JSON.stringify(data));
-
-            let cwTimestamp = data.cwTimestamp;
-            let dbTimestamp = data.dbLog.LastWritten;
-            console.log("logstream timestamp " + cwTimestamp + ", db timestamp: " + dbTimestamp);
-            //if database log file is newer than the last cloudwatch event in log, continue to download database file..
-            if ((dbTimestamp > cwTimestamp)) {
-                //currentRunTime >  currentTime % (5 * 60 * 1000) < intervalCheck                
-                //mysql rotates logs every 5 mins and hourly, if the time is within time of file rotation, must check flushed log to see if any events happened in between interval checks and got flushed...
-                var executionTime = Date.now();
-                console.log("remainder is: " + (executionTime % mySqlHourlyRotationInterval) + ", intervalInMs: " + intervalInMs);
-                console.log("remainder is: " + (executionTime % mySqlRotationInterval) + ", intervalInMs: " + intervalInMs);
-
-                var appendRotationLogEvents = ((executionTime % mySqlHourlyRotationInterval) < intervalInMs) ? (log[dbType].runningLog + '.' + new Date(executionTime - intervalInMs).getUTCHours()) : false;
-
-                if (!appendRotationLogEvents)
-                    appendRotationLogEvents = ((executionTime % mySqlRotationInterval) < intervalInMs) ? log[dbType].runningLog : false;
-
-                if (appendRotationLogEvents) {
-                    console.log("processing running log as well since execution time < last file rotation..");
-                    downloadRDSLogFile(instanceId, appendRotationLogEvents, function (err, previousIntervalLog) {
-                        if (!err) {
-                            var runningEventsList = log[dbType].parser(previousIntervalLog.LogFileData, cwTimestamp);
-                            if (data.dbLog.Size > 0)
-                                downloadRDSLogFile(instanceId, log[dbType].log(), function (err, data) {
-                                    if (!err) {
-                                        var eventsList = log[dbType].parser(data.LogFileData, cwTimestamp);
-                                        runningEventsList.concat(eventsList);
-                                        console.log("events to push are: " + JSON.stringify(eventsList));
-                                        cb(null, runningEventsList);
-                                    } else {
-                                        cb(err, null);
-                                    }
-                                });
-                        } else {
-                            console.log("Error downloading previous interval file: " + appendRotationLogEvents + ":" + err);
-                            cb(err, null);
-                        }
-                    });
-                } else if (data.dbLog.Size > 0) {
-                    downloadRDSLogFile(instanceId, log[dbType].log(), function (err, data) {
-                        if (!err) {
-                            var eventsList = log[dbType].parser(data.LogFileData, cwTimestamp);
-                            console.log("events to push are: " + JSON.stringify(eventsList));
-                            cb(null, eventsList);
-                        } else {
-                            cb(err, null);
-                        }
-                    });
-                }
-
-
-            } else {
-                cb(null, null);
-            }
         }
+
     },
     "oracle-ee": {
         log: function () {
@@ -188,29 +195,29 @@ var log = {
             var regexp = /[A-Z][a-z]{2} [A-Z][a-z]{2} \d{1,2} \d{2}:\d{2}:\d{2} \d{4}/g;
 
             var logeventslist = [];
-            console.log('Log by lines length is: ' + loglines.length); // successful response
+            //console.log('Log by lines length is: ' + loglines.length); // successful response
 
             for (let ll = 0; ll < loglines.length; ll++) {
-                console.log("loglines[ll].length: " + loglines[ll].length + ", string is: " + loglines[ll] + ", ");
+                //console.log("loglines[ll].length: " + loglines[ll].length + ", string is: " + loglines[ll] + ", ");
                 if (loglines[ll].length === 24 && loglines[ll].match(regexp)) {
                     var timestampstr = loglines[ll].substring(0, 3) + "," + loglines[ll].substring(3, 11) + loglines[ll].substring(20, 24) + loglines[ll].substring(10, 19) + " GMT";
-                    console.log("transformed string is: " + timestampstr);
+                    //console.log("transformed string is: " + timestampstr);
                     var epoch = Date.parse(timestampstr);
                     var logstr = "";
                     while (!(typeof loglines[(ll + 1)] === "undefined") && !loglines[(ll + 1)].match(regexp)) {
                         ll++;
                         logstr = logstr.concat(loglines[ll] + '\n');
                     }
-                    console.log("parsed string is: " + logstr);
+                    //console.log("parsed string is: " + logstr);
                     if (epoch > cwTimestamp) {
                         logeventslist.push({
                             timestamp: epoch,
                             message: logstr
                         });
                     }
-                    console.log('Epoch is: ' + epoch + " and string is " + logstr);
+                    //console.log('Epoch is: ' + epoch + " and string is " + logstr);
                 }
-                console.log('Log line of ' + ll + ' string is: ' + logstr + '\n');
+                //console.log('Log line of ' + ll + ' string is: ' + logstr + '\n');
             }
             return logeventslist;
         },
@@ -218,11 +225,11 @@ var log = {
             //hardcoded for now, not known if possible to retrieve cloudwatch event lambda interval...
             var rotationInterval = 24 * 60 * 60 * 1000;
             //log has been updated..
-            console.log("data is: " + JSON.stringify(data));
+            //console.log("data is: " + JSON.stringify(data));
 
             let cwTimestamp = data.cwTimestamp;
             let dbTimestamp = data.dbLog.LastWritten;
-            console.log("logstream timestamp " + cwTimestamp + ", db timestamp: " + dbTimestamp);
+            //console.log("logstream timestamp " + cwTimestamp + ", db timestamp: " + dbTimestamp);
             //if database log file is newer than the last cloudwatch event in log, continue to download database file..
             if ((dbTimestamp > cwTimestamp) && (data.dbLog.Size > 0)) {
                 //currentRunTime >  currentTime % (5 * 60 * 1000) < intervalCheck                
@@ -232,7 +239,7 @@ var log = {
                 var appendRotationLogEvents = (executionTime.getTime() % rotationInterval < intervalInMs) ? (log[dbType].runningLog(executionTime - intervalInMs)) : false;
                 //TODO avoid processing by checking timestamp on log file to see if its updated within threshhold...
                 if (appendRotationLogEvents) {
-                    console.log("processing running log as well since execution time < last file rotation..");
+                    console.log("processing running log as well for " + instanceId + " since execution time < last file rotation..");
                     downloadRDSLogFile(instanceId, appendRotationLogEvents, function (err, data) {
                         if (!err) {
                             var runningEventsList = log[dbType].parser(data.LogFileData, cwTimestamp);
@@ -240,7 +247,7 @@ var log = {
                                 if (!err) {
                                     var eventsList = log[dbType].parser(data.LogFileData, cwTimestamp);
                                     runningEventsList.concat(eventsList);
-                                    console.log("events to push are: " + JSON.stringify(eventsList));
+                                    //console.log("events to push are: " + JSON.stringify(eventsList));
                                     cb(null, runningEventsList);
                                 } else {
                                     cb(err, null);
@@ -253,7 +260,7 @@ var log = {
                     downloadRDSLogFile(instanceId, log[dbType].log(), function (err, data) {
                         if (!err) {
                             var eventsList = log[dbType].parser(data.LogFileData, cwTimestamp);
-                            console.log("events to push are: " + JSON.stringify(eventsList));
+                            //console.log("events to push are: " + JSON.stringify(eventsList));
                             cb(null, eventsList);
                         } else {
                             cb(err, null);
@@ -284,7 +291,7 @@ var log = {
                     retData.cwTimestamp = (data) ? data.timestamp : 0;
                     getRDSLogFile(instanceId, log[dbType].log(), function (err, data) {
                         if (!err) {
-                            console.log("retrieved db log: " + JSON.stringify(data));
+                            //console.log("retrieved db log: " + JSON.stringify(data));
                             retData.dbLog = data.dbLog;
                             cb(null, retData);
                         } else {
@@ -301,7 +308,7 @@ var log = {
         parser: function (LogFileData, cwTimestamp) {
             var loglines = LogFileData.split(/\r?\n/);
             var logeventslist = [];
-            console.log('Log by lines length is: ' + loglines.length); // successful response
+            //console.log('Log by lines length is: ' + loglines.length); // successful response
             for (let ll = 0; ll < loglines.length; ll++) {
                 if (loglines[ll].length === 0 || loglines[ll].startsWith('Version:'))
                     continue;
@@ -316,8 +323,8 @@ var log = {
                 //timestampstr = timestampstr.concat(dblogs.GMT_OFFSET["us-west-2"]);
                 var epoch = Date.parse(timestampstr + 'GMT');
 
-                console.log('Epoch is: ' + epoch + " and lastEventTimestamp is " + cwTimestamp);
-                console.log('Log line of ' + ll + ' string is: ' + logstr + '\n');
+                //console.log('Epoch is: ' + epoch + " and lastEventTimestamp is " + cwTimestamp);
+                //console.log('Log line of ' + ll + ' string is: ' + logstr + '\n');
                 if (epoch > cwTimestamp) {
                     logeventslist.push({
                         timestamp: epoch,
@@ -331,11 +338,11 @@ var log = {
             //hardcoded for now, not known if possible to retrieve cloudwatch event lambda interval...
             var rotationInterval = 1 * 60 * 60 * 1000;
             //log has been updated..
-            console.log("data is: " + JSON.stringify(data));
+            //console.log("data is: " + JSON.stringify(data));
 
             let cwTimestamp = data.cwTimestamp;
             let dbTimestamp = data.dbLog.LastWritten;
-            console.log("logstream timestamp " + cwTimestamp + ", db timestamp: " + dbTimestamp);
+            //console.log("logstream timestamp " + cwTimestamp + ", db timestamp: " + dbTimestamp);
             //if database log file is newer than the last cloudwatch event in log, continue to download database file..
             if ((dbTimestamp > cwTimestamp) && (data.dbLog.Size > 0)) {
                 //currentRunTime >  currentTime % (5 * 60 * 1000) < intervalCheck                
@@ -345,7 +352,7 @@ var log = {
                 //TODO avoid processing by checking timestamp on log file to see if its updated within threshhold...
                 var appendRotationLogEvents = (executionTime.getTime() % rotationInterval < intervalInMs) ? (log[dbType].log(executionTime - intervalInMs)) : false;
                 if (appendRotationLogEvents) {
-                    console.log("processing running log as well since execution time within  < last file rotation..");
+                    console.log("processing running log for " + instanceId + " as well since execution time within  < last file rotation..");
                     downloadRDSLogFile(instanceId, appendRotationLogEvents, function (err, data) {
                         if (!err) {
                             var runningEventsList = log[dbType].parser(data.LogFileData, cwTimestamp);
@@ -354,7 +361,7 @@ var log = {
                                     var eventsList = log[dbType].parser(data.LogFileData, cwTimestamp);
                                     if (runningEventsList.length > 0)
                                         eventslist.concat(runningEventsList);
-                                    console.log("events to push are: " + JSON.stringify(eventsList));
+                                    //console.log("events to push are: " + JSON.stringify(eventsList));
                                     cb(null, eventsList);
                                 } else {
                                     cb(err, null);
@@ -367,7 +374,7 @@ var log = {
                     downloadRDSLogFile(instanceId, log[dbType].log(), function (err, data) {
                         if (!err) {
                             var eventsList = log[dbType].parser(data.LogFileData, cwTimestamp);
-                            console.log("events to push are: " + JSON.stringify(eventsList));
+                            //console.log("events to push are: " + JSON.stringify(eventsList));
                             cb(null, eventsList);
                         } else {
                             cb(err, null);
@@ -394,7 +401,7 @@ var log = {
                     retData.cwTimestamp = (data) ? data.timestamp : 0;
                     getRDSLogFile(instanceId, log[dbType].log(), function (err, data) {
                         if (!err) {
-                            console.log("retrieved db log: " + JSON.stringify(data));
+                            //console.log("retrieved db log: " + JSON.stringify(data));
                             retData.dbLog = data.dbLog;
                             retData.logs = data.logs;
                             cb(null, retData);
@@ -436,7 +443,7 @@ var log = {
                             message: logstr
                         });
                     }
-                    console.log('Epoch is: ' + epoch + " and string is " + logstr);
+                    //console.log('Epoch is: ' + epoch + " and string is " + logstr);
                 }
             }
             return logeventslist;
@@ -445,7 +452,7 @@ var log = {
             //hardcoded for now, not known if possible to retrieve cloudwatch event lambda interval...
             var rotationInterval = 1 * 60 * 60 * 1000;
             //log has been updated..
-            console.log("data is: " + JSON.stringify(data));
+            //console.log("data is: " + JSON.stringify(data));
 
             let cwTimestamp = data.cwTimestamp;
             let dbTimestamp = data.dbLog.LastWritten;
@@ -463,7 +470,7 @@ var log = {
                 downloadRDSLogFile(instanceId, log[dbType].log(), function (err, data) {
                     if (!err) {
                         var eventsList = log[dbType].parser(data.LogFileData, cwTimestamp);
-                        console.log("events to push are: " + JSON.stringify(eventsList));
+                        //console.log("events to push are: " + JSON.stringify(eventsList));
                         cb(null, eventsList);
                     } else {
                         cb(err, null);
@@ -477,6 +484,8 @@ var log = {
 };
 //sqlserver ex is the same as sql server se...
 log["sqlserver-ex"] = log["sqlserver-se"];
+//aurora is the same as mysql
+log["aurora"] = log["mysql"];
 
 //==========================
 
@@ -592,7 +601,7 @@ function getCWLogStream(instanceId, dbType, cb) {
                 if (data.logStreams[s].logStreamName === logStreamName) {
                     retData.exists = true;
                     retData.logStream = data.logStreams[s];
-                    console.log("found log stream: " + retData.logStream.logStreamName);
+                    //console.log("found log stream: " + retData.logStream.logStreamName);
                     cb(null, retData);
                 }
             }
@@ -616,11 +625,11 @@ function downloadRDSLogFile(instanceId, logStreamName, cb) {
             //NumberOfLines: 0
     };
 
-    console.log('downloading log data for instance: ' + instanceId + "with file: " + logStreamName);
+    //console.log('downloading log data for instance: ' + instanceId + "with file: " + logStreamName);
 
     rds.downloadDBLogFilePortion(downloadLogParams, function (err, data) {
         if (err) {
-            console.log('error downloading log: ' + err, err.stack); // an error occurred
+            console.log("error downloading log for instance " + instanceId + ": " + err, err.stack); // an error occurred
             cb(err, null);
         } else {
             cb(null, data);
@@ -640,12 +649,12 @@ function putCWLogEvents(instanceId, logEvents, logStream, cb) {
         //will be undefined for newly created stream..
         sequenceToken: logStream.uploadSequenceToken
     };
-    console.log("uploading with sequence token: " + logStream.uploadSequenceToken);
-    console.log("uploading events: " + logEvents);
+    //console.log("uploading with sequence token: " + logStream.uploadSequenceToken);
+    console.log("uploading events: " + JSON.stringify(logEvents));
 
     cloudwatchlogs.putLogEvents(params, function (err, data) {
         if (err) {
-            console.log("error placing events: " + JSON.stringify(err));
+            console.log("ERROR:  error placing events for " + instanceId + ": " + JSON.stringify(err));
             cb(err, null); // an error occurred                        
         } else {
             //successfully placed log data..    
@@ -678,7 +687,7 @@ function getRDSLogFile(instanceId, logStream, cb) {
         //MaxRecords: 0
     };
 
-    console.log("Looking for: " + logStream);
+    //console.log("Looking for: " + logStream);
 
     rds.describeDBLogFiles(params, function (err, dbData) {
         if (err) {
@@ -692,7 +701,7 @@ function getRDSLogFile(instanceId, logStream, cb) {
                 //log file updated, process updates...
                 if ((dbData.DescribeDBLogFiles[m].LogFileName === logStream)) {
                     retData.dbLog = dbData.DescribeDBLogFiles[m];
-                    console.log("found database file: " + logStream);
+                    //console.log("found database file: " + logStream);
                     return cb(null, retData);
                 }
             }
@@ -704,6 +713,47 @@ function getRDSLogFile(instanceId, logStream, cb) {
 
     });
 }
+
+
+function getRDSLogFiles(instanceId, logStream, cb) {
+    var params = {
+        DBInstanceIdentifier: instanceId,
+        /* required */
+        //FileLastWritten: 0,
+        //FileSize: 0,
+        FilenameContains: logStream
+
+        //Filters: [{
+        //        Name: 'STRING_VALUE',
+        //        /* required */
+        //        Values: [ /* required */
+        //            'STRING_VALUE',
+        /* more items */
+        //        ]
+        //    },
+        //    /* more items */
+        //],
+        //Marker: 'STRING_VALUE',
+        //MaxRecords: 0
+    };
+
+    //console.log("Looking for: " + logStream);
+
+    rds.describeDBLogFiles(params, function (err, dbData) {
+        if (err) {
+            console.log("Error getting logfile info: " + err, err.stack); // an error occurred 
+            cb(err, null);
+        } else {
+            return cb(null, dbData.DescribeDBLogFiles);
+            //console.log(data); // successful 
+
+        }
+
+    });
+}
+
+
+
 
 module.exports = {
     log,

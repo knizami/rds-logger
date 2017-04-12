@@ -31,18 +31,18 @@ rds.describeDBInstances(dbparams, function (err, data) {
         //iterate through all db instances
         for (let n = 0; n < data.DBInstances.length; n++) {
             let dbtype = data.DBInstances[n].Engine;
-            console.log('db type is: ' + dbtype);
-            let logFilename = dblogs.log[dbtype].log;
+            //console.log('db type is: ' + dbtype);
+            let logFilename = dblogs.log[dbtype].log();
             let instanceId = data.DBInstances[n].DBInstanceIdentifier;
 
             dblogs.getCWLogStream(instanceId, dbtype, function (err, CWLogStreamData) {
                 if (CWLogStreamData.exists) {
-                    console.log("dbtype is: " + dbtype);
+                    //console.log("dbtype is: " + dbtype);
                     dblogs.log[dbtype].checkLog(dbtype, instanceId, function (err, data) {
                         if (!err) {
                             dblogs.log[dbtype].processLog(dbtype, instanceId, data, function (err, data) {
                                 if (!err && data) {
-                                    console.log("using sequence token: " + CWLogStreamData.logStream.uploadSequenceToken);
+                                    //console.log("using sequence token: " + CWLogStreamData.logStream.uploadSequenceToken);
                                     dblogs.putCWLogEvents(instanceId, data, CWLogStreamData.logStream, function (err, data) {
                                         if (!err) {
                                             console.log("finished processing & placing events for: " + instanceId);

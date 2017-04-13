@@ -19,16 +19,37 @@ var dbparams = {
 
 };
 
-rdslogs.processLogs(dbparams, function (err, data) {
-    if (!err) {
-        if (data.length)
-            console.log("Finished: " + JSON.stringify(data));
-        else
-            console.log("No log data ingested...");
-    } else {
-        console.log("ERROR: " + err);
-    }
-});
+var local = false;
+
+exports.handler = (event, context, callback) => {
+    console.time("rdsLog");
+    rdslogs.processLogs(dbparams, function (err, data) {
+        if (!err) {
+            if (data.length) {
+                console.log("Finished: " + JSON.stringify(data));
+                console.timeEnd("rdsLog");
+
+                if (!local)
+                    callback(null, data);
+            } else {
+                console.log("No log data ingested...");
+                if (!local)
+                    callback(null, null);
+            }
+        } else {
+            console.log("ERROR: " + err);
+            if (!local)
+                callback(err);
+        }
+    });
+
+};
+
+
+if (process.argv[2] === "local") {
+    local = true;
+    exports.handler();
+}
 
 
 

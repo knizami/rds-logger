@@ -17,6 +17,7 @@
   },
   "homepage": "https://github.com/knizami/rds-logger#readme",
   "dependencies": {
+    "async": "^2.3.0",
     "aws-sdk": "^2.31.0"
   },
   "engine": "node >= 6.1.0"

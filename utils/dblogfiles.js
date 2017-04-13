@@ -8,26 +8,30 @@
  **/
 "use strict";
 var AWS = require('aws-sdk');
+var async = require('async');
 //var async = require('async');
 //NOTE:  each region may support different database engines and database versions
-var rds = new AWS.RDS({
-    region: 'us-west-2'
-});
 
-
-var cloudwatchlogs = new AWS.CloudWatchLogs({
-    region: 'us-west-2'
-});
 
 var interval = 1;
 var intervalInMs = interval * 60 * 1000;
 
 const LOG_GROUP_PREFIX = "/aws/RDS/";
+const DEFAULT_REGION = "us-east-1";
 
+var cloudwatchlogs = null;
+var rds = null;
 
 //NOTE:  Its possible that filenames would change from version to version of DB
 //TODO:  validation code that log files for a given db type / version are correct
 
+function setRDS(rdsInstance) {
+    rds = rdsInstance;
+}
+
+function setCloudWatch(cloudwatchInstance) {
+    cloudwatchlogs = cloudwatchInstance;
+}
 
 var log = {
     processLog: function (logs, instanceId, dbType, cwTimestamp, runningEvents, cb) {
@@ -67,8 +71,11 @@ var log = {
                         var logsToProcess = [];
                         //console.log("processing logs, total: " + dbLogs.length + ": " + JSON.stringify(dbLogs));
                         for (let x = 0; x < dbLogs.length; x++) {
-                            if (dbLogs[x].Size > 0 && dbLogs[x].LastWritten > cwTimestamp)
+                            if (dbLogs[x].Size > 0 && dbLogs[x].LastWritten > cwTimestamp) {
                                 logsToProcess.push(dbLogs[x].LogFileName);
+                                //console.log("For instanceId:" + instanceId);
+                                //console.log("size is: " + dbLogs[x].Size + ", LastWritten: " + dbLogs[x].LastWritten + ", cwTimestamp: " + cwTimestamp);
+                            }
                         }
                         if (logsToProcess.length > 0) {
                             log.processLog(logsToProcess, instanceId, dbType, cwTimestamp, null, function (err, data) {
@@ -107,7 +114,7 @@ var log = {
         parser: function (LogFileData, cwTimestamp) {
             var loglines = LogFileData.split(/\r?\n/);
             var logeventslist = [];
-            console.log('Log by lines length is: ' + loglines.length); // successful response
+            //console.log('Log by lines length is: ' + loglines.length); // successful response
             for (let ll = 0; ll < loglines.length; ll++) {
                 if (loglines[ll].length === 0 || loglines[ll].startsWith('Version:'))
                     continue;
@@ -183,12 +190,8 @@ var log = {
     //Sample Line:
     //2017-04-07 21:01:44 UTC::@:[3367]:LOG: checkpoint starting: time
     "postgres": {
-        log: function (timeInMs) {
-            if (!timeInMs)
-                timeInMs = Date.now();
-            var currDate = new Date(timeInMs);
-            var currHour = (currDate.getUTCHours() < 10) ? "0" + currDate.getUTCHours() : currDate.getUTCHours();
-            return "error/postgresql.log." + currDate.toISOString().substr(0, 10) + "-" + currHour;
+        log: function () {
+            return "error/postgresql.log";
         },
         stream: "error/postgresql.log",
         parser: function (LogFileData, cwTimestamp) {
@@ -272,13 +275,13 @@ log["aurora"] = log["mysql"];
 function instrumentLogging(dbInstance, dbType, cb) {
     let cLGParams = {
         logGroupName: LOG_GROUP_PREFIX + dbInstance
-            // required */
-            /*
-            tags: {
-                Logs: 'STRING_VALUE'
-                // anotherKey: ... 
-            }                                    
-            */
+        // required */
+        /*
+        tags: {
+            Logs: 'STRING_VALUE'
+            // anotherKey: ... 
+        }                                    
+        */
     };
 
     cloudwatchlogs.createLogGroup(cLGParams, function (err, data) {
@@ -336,9 +339,9 @@ function getLatestCWEvent(instanceId, logStream, cb) {
         /* required */
         //  endTime: 0,
         limit: 1
-            //  nextToken: 'STRING_VALUE',
-            //  startFromHead: true || false,
-            //  startTime: 0
+        //  nextToken: 'STRING_VALUE',
+        //  startFromHead: true || false,
+        //  startTime: 0
     };
 
     cloudwatchlogs.getLogEvents(params, function (err, data) {
@@ -365,8 +368,8 @@ function getCWLogStream(instanceId, dbType, cb) {
         //descending: true || false,
         //limit: 0,
         logStreamNamePrefix: logStreamName
-            //nextToken: 'STRING_VALUE',
-            //orderBy: 'LogStreamName | LastEventTime'
+        //nextToken: 'STRING_VALUE',
+        //orderBy: 'LogStreamName | LastEventTime'
     };
 
     cloudwatchlogs.describeLogStreams(dLSParams, function (err, data) {
@@ -400,9 +403,9 @@ function downloadRDSLogFile(instanceId, logStreamName, cb) {
         DBInstanceIdentifier: instanceId,
         /* required */
         LogFileName: logStreamName
-            /* required */
-            //Marker: 'STRING_VALUE',
-            //NumberOfLines: 0
+        /* required */
+        //Marker: 'STRING_VALUE',
+        //NumberOfLines: 0
     };
 
     //console.log('downloading log data for instance: ' + instanceId + "with file: " + logStreamName);
@@ -430,7 +433,7 @@ function putCWLogEvents(instanceId, logEvents, logStream, cb) {
         sequenceToken: logStream.uploadSequenceToken
     };
     //console.log("uploading with sequence token: " + logStream.uploadSequenceToken);
-    console.log("uploading events: " + JSON.stringify(logEvents));
+    //console.log("uploading events: " + JSON.stringify(logEvents));
 
     cloudwatchlogs.putLogEvents(params, function (err, data) {
         if (err) {
@@ -440,11 +443,239 @@ function putCWLogEvents(instanceId, logEvents, logStream, cb) {
             //successfully placed log data..    
             console.log("data placed data for : " + instanceId + " and file " + logStream.logStreamName); // successful response
             //tag logstream with next sequence #
-            cb(null, data);
+            var completed = {
+                logGroupName: LOG_GROUP_PREFIX + instanceId,
+                logStreamName: logStream.logStreamName
+            }
+            cb(null, completed);
         }
     });
 }
 
+
+/* 
+ * Description:  The kickstarter....
+ * Parameters:
+ * ******************* 
+ * Common to AWS SDK RDS:describeDBInstances() (http://docs.aws.amazon.com/AWSJavaScriptSDK/latest/AWS/RDS.html#describeDBInstances-property)
+ * *******************
+DBInstanceIdentifier — (String) 
+The user-supplied instance identifier. If this parameter is specified, information from only the specific DB instance is returned. This parameter isn't case-sensitive.
+
+Constraints:
+
+    Must contain from 1 to 63 alphanumeric characters or hyphens
+
+    First character must be a letter
+
+    Cannot end with a hyphen or contain two consecutive hyphens
+
+Filters — (Array<map>)
+
+A filter that specifies one or more DB instances to describe.
+
+Supported filters:
+
+    db-cluster-id - Accepts DB cluster identifiers and DB cluster Amazon Resource Names (ARNs). The results list will only include information about the DB instances associated with the DB Clusters identified by these ARNs.
+
+    db-instance-id - Accepts DB instance identifiers and DB instance Amazon Resource Names (ARNs). The results list will only include information about the DB instances identified by these ARNs.
+
+    Name — required — (String)
+
+    This parameter is not currently supported.
+    Values — required — (Array<String>)
+
+    This parameter is not currently supported.
+ * ****************************
+ * Unique to function:
+ * ****************************
+ region - (String)
+ Region where RDS instances and Cloudwatch Logs reside, defaults to DEFAULT_REGION = "us-east-1"
+
+ Tag — (Array<map>)
+ Process RDS instances with given Name and Value pair
+
+     Name - (String)
+     Only processes RDS instances with the given Tag name
+
+     Value - (String)
+     Only process RDS instances with given Tag value
+
+ instanceTypes - (Array<String>)
+ User supplied instance types to process.  If this parameter is specified, only databases of the specified types will be processed.
+ 
+ Constraints:
+ Array must only contain supported types:
+ "sqlserver-se", "sqlserver-ex", "oracle-ee", "mysql", "aurora", "postgres"
+
+ NOTE:  If DBInstanceIdentifier is also provided then this parameter is ignored...
+
+ */
+function processLogs(params, cb) {
+    var selectedRegion = (params && params.region) ? params.region : DEFAULT_REGION;
+
+    setRDS(new AWS.RDS({
+        region: selectedRegion
+    }));
+
+    setCloudWatch(new AWS.CloudWatchLogs({
+        region: selectedRegion
+    }));
+
+    var tagFilter = (params && params.Tag && params.Tag.Name && params.Tag.Value) ? params.Tag : null;
+    var instanceTypes = (params && params.instanceTypes) ? params.instanceTypes : null;
+    var DBInstanceIdentifier = (params && params.DBInstanceIdentifier) ? params.DBInstanceIdentifier : null;
+    var noFilter = !instanceTypes && !DBInstanceIdentifier;
+
+    var dbparams = {
+        DBInstanceIdentifier: DBInstanceIdentifier
+    };
+    rds.describeDBInstances(dbparams, function (err, data) {
+        //db instance exists..
+        if (!err) {
+            //iterate through all db instances, processing each asynchronously...
+            var completed = [];
+            async.forEach(data.DBInstances, function (dbInstance, fcallback) {
+                let dbtype = dbInstance.Engine;
+                let logFilename = log[dbtype].log();
+                let instanceId = dbInstance.DBInstanceIdentifier;
+
+                if (tagFilter) {
+                    let arn = dbInstance.DBInstanceArn;
+                    checkRDSTag(arn, tagFilter, function (err, found) {
+                        if (!err) {
+                            //tag was found, continue processing and check other filters...
+                            if (found) {
+                                if (noFilter || (instanceTypes && instanceTypes.indexOf(dbtype))) {
+                                    //console.log('db type is: ' + dbtype);
+                                    processOrCreateLog(instanceId, dbType, function (err, data) {
+                                        if (!err) {
+                                            console.log("Data: " + JSON.stringify(data));
+                                            completed.push(data);
+                                            fcallback();
+                                        } else {
+                                            cb(err, null);
+                                        }
+                                    });
+                                }
+                            } else {
+                                //tag wasn't found but was specified, don't process anything...
+                                console.log("tag specified was not found on instance: " + instanceId);
+                            }
+                        } else {
+                            console.log("Error checking RDS Tag");
+                            cb(err, null);
+                        }
+                    });
+                }
+
+                //only process filtered types...
+                else if (noFilter || (instanceTypes && instanceTypes.indexOf(dbtype))) {
+                    //console.log('db type is: ' + dbtype);
+                    processOrCreateLog(instanceId, dbtype, function (err, data) {
+                        if (!err) {
+                            console.log("Data: " + JSON.stringify(data));
+                            completed.push(data);
+                            fcallback();
+                        } else {
+                            console.log("Error occured: " + JSON.stringify(data));
+                            cb(err, null);
+                            fcallback(err);
+                        }
+                    });
+                }
+
+            }, function (err) {
+                // if any of the file processing produced an error, err would equal that error
+                if (err) {
+                    // One of the iterations produced an error.
+                    // All processing will now stop.
+                    cb(err, null);
+                } else {
+                    cb(null, completed);
+                }
+            });
+        } else {
+            console.log('Error retrieving db instances: ' + err, err.stack); // an error occurred
+        }
+    });
+}
+
+function testme(completed) {
+    console.log("Completed: " + JSON.stringify(completed));
+}
+
+//does check against tagFilter.Name & tagFilter.Value
+function checkRDSTag(arn, tagFilter, cb) {
+    let params = {
+        ResourceName: arn
+    };
+
+    rds.listTagsForResource(params, function (err, data) {
+        if (err) {
+            cb(err, null);
+        } else {
+            if (data && data.TagList) {
+                //console.log(data); // successful response
+                for (var tag in data.TagList) {
+                    if ((tag.Key === tagFilter.Name) && (tag.Value === tagFilter.Value))
+                        cb(null, true)
+                }
+            }
+            cb(null, false);
+        }
+    });
+}
+
+function processOrCreateLog(instanceId, dbtype, cb) {
+    getCWLogStream(instanceId, dbtype, function (err, CWLogStreamData) {
+        if (CWLogStreamData.exists) {
+            //console.log("dbtype is: " + dbtype);
+            log.checkLogs(dbtype, instanceId, function (err, data) {
+                if (!err && data) {
+                    putCWLogEvents(instanceId, data, CWLogStreamData.logStream, function (err, data) {
+                        if (!err) {
+                            console.log("finished processing & placing events for: " + instanceId);
+                            cb(null, data);
+                        } else {
+                            console.log("error placing events for: " + instanceId);
+                            cb(err, null);
+                        }
+                    });
+                } else if (!data) {
+                    console.log("no data to process for: " + instanceId);
+                    cb(null, null)
+                } else {
+                    console.log("error checking log: " + err, err.stack); // an error occurred
+                    cb(err, null);
+                }
+            });
+        } else {
+            instrumentLogging(instanceId, dbtype, function (err, data) {
+                log.checkLogs(dbtype, instanceId, function (err, data) {
+                    if (!err && data) {
+                        putCWLogEvents(instanceId, data, CWLogStreamData.logStream, function (err, data) {
+                            if (!err) {
+                                console.log("finished processing & placing events for: " + instanceId);
+                                cb(null, data);
+                            } else {
+                                console.log("error placing events for: " + instanceId);
+                                cb(err, null);
+                            }
+                        });
+                    } else if (!data) {
+                        console.log("no data to process for: " + instanceId);
+                        cb(null, null);
+                    } else {
+                        console.log("error checking log: " + err, err.stack); // an error occurred
+                        cb(err, null);
+                    }
+                });
+            });
+        }
+    });
+
+}
 
 function getRDSLogFiles(instanceId, logStream, cb) {
     var params = {
@@ -487,8 +718,5 @@ function getRDSLogFiles(instanceId, logStream, cb) {
 
 
 module.exports = {
-    log,
-    getCWLogStream,
-    putCWLogEvents,
-    instrumentLogging
+    processLogs
 };

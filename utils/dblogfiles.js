@@ -90,7 +90,7 @@ var log = {
                                 }
                             });
                         } else {
-                            console.log("no logs to process...");
+                            //console.log("no logs to process...");
                             cb(null, null);
                         }
                     } else {
@@ -445,7 +445,8 @@ function putCWLogEvents(instanceId, logEvents, logStream, cb) {
             //tag logstream with next sequence #
             var completed = {
                 logGroupName: LOG_GROUP_PREFIX + instanceId,
-                logStreamName: logStream.logStreamName
+                logStreamName: logStream.logStreamName,
+                logCount: logEvents.length
             }
             cb(null, completed);
         }
@@ -550,9 +551,11 @@ function processLogs(params, cb) {
                                     //console.log('db type is: ' + dbtype);
                                     processOrCreateLog(instanceId, dbType, function (err, data) {
                                         if (!err) {
-                                            console.log("Data: " + JSON.stringify(data));
-                                            completed.push(data);
-                                            fcallback();
+                                            //console.log("Data: " + JSON.stringify(data));
+                                            if (data) {
+                                                completed.push(data);
+                                                fcallback();
+                                            }
                                         } else {
                                             cb(err, null);
                                         }
@@ -574,12 +577,13 @@ function processLogs(params, cb) {
                     //console.log('db type is: ' + dbtype);
                     processOrCreateLog(instanceId, dbtype, function (err, data) {
                         if (!err) {
-                            console.log("Data: " + JSON.stringify(data));
-                            completed.push(data);
+                            if (data) {
+                                completed.push(data);
+                                console.log("Data: " + JSON.stringify(data));
+                            }
                             fcallback();
                         } else {
                             console.log("Error occured: " + JSON.stringify(data));
-                            cb(err, null);
                             fcallback(err);
                         }
                     });
@@ -590,7 +594,7 @@ function processLogs(params, cb) {
                 if (err) {
                     // One of the iterations produced an error.
                     // All processing will now stop.
-                    cb(err, null);
+                    cb(err);
                 } else {
                     cb(null, completed);
                 }
@@ -601,9 +605,6 @@ function processLogs(params, cb) {
     });
 }
 
-function testme(completed) {
-    console.log("Completed: " + JSON.stringify(completed));
-}
 
 //does check against tagFilter.Name & tagFilter.Value
 function checkRDSTag(arn, tagFilter, cb) {
@@ -618,8 +619,10 @@ function checkRDSTag(arn, tagFilter, cb) {
             if (data && data.TagList) {
                 //console.log(data); // successful response
                 for (var tag in data.TagList) {
-                    if ((tag.Key === tagFilter.Name) && (tag.Value === tagFilter.Value))
-                        cb(null, true)
+                    if ((tag.Key === tagFilter.Name) && (tag.Value === tagFilter.Value)) {
+                        cb(null, true);
+                        break;
+                    }
                 }
             }
             cb(null, false);
@@ -635,7 +638,7 @@ function processOrCreateLog(instanceId, dbtype, cb) {
                 if (!err && data) {
                     putCWLogEvents(instanceId, data, CWLogStreamData.logStream, function (err, data) {
                         if (!err) {
-                            console.log("finished processing & placing events for: " + instanceId);
+                            //console.log("finished processing & placing events for: " + instanceId);
                             cb(null, data);
                         } else {
                             console.log("error placing events for: " + instanceId);

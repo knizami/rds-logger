@@ -11,12 +11,16 @@
 var rdslogs = require('./utils/dblogfiles');
 
 var dbparams = {
-    region: "us-west-2"
+    region: "us-west-2",
+
 };
 
 rdslogs.processLogs(dbparams, function (err, data) {
     if (!err) {
-        console.log("Finished: " + JSON.stringify(data));
+        if (data.length)
+            console.log("Finished: " + JSON.stringify(data));
+        else
+            console.log("No log data ingested...");
     } else {
         console.log("ERROR: " + err);
     }

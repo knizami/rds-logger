@@ -300,7 +300,7 @@ function instrumentLogging(dbInstance, dbType, cb) {
                             //place first event in log...
                             var logEvents = [{
                                 message: "new Cloudwatch Logs Stream and Group created for database instance: " + dbInstance,
-                                timestamp: Date.now()
+                                timestamp: 0
                             }];
                             putCWLogEvents(dbInstance, logEvents, data.logStream, function (err, data) {
                                 if (!err) {
@@ -455,10 +455,10 @@ function putCWLogEvents(instanceId, logEvents, logStream, cb) {
 
 
 /* 
- * Description:  The kickstarter....
+ * Description:  Kickstarter function to start log processing.
  * Parameters:
  * ******************* 
- * Common to AWS SDK RDS:describeDBInstances() (http://docs.aws.amazon.com/AWSJavaScriptSDK/latest/AWS/RDS.html#describeDBInstances-property)
+ * The following are common to AWS SDK RDS:describeDBInstances() (http://docs.aws.amazon.com/AWSJavaScriptSDK/latest/AWS/RDS.html#describeDBInstances-property)
  * *******************
 DBInstanceIdentifier — (String) 
 The user-supplied instance identifier. If this parameter is specified, information from only the specific DB instance is returned. This parameter isn't case-sensitive.
@@ -523,7 +523,7 @@ function processLogs(params, cb) {
         region: selectedRegion
     }));
 
-    var tagFilter = (params && params.Tag && params.Tag.Name && params.Tag.Value) ? params.Tag : null;
+    var tagFilter = (params && params.Tag && params.Tag.Name) ? params.Tag : null;
     var instanceTypes = (params && params.instanceTypes) ? params.instanceTypes : null;
     var DBInstanceIdentifier = (params && params.DBInstanceIdentifier) ? params.DBInstanceIdentifier : null;
     var noFilter = !instanceTypes && !DBInstanceIdentifier;
@@ -531,6 +531,10 @@ function processLogs(params, cb) {
     var dbparams = {
         DBInstanceIdentifier: DBInstanceIdentifier
     };
+
+    var filterStr = ((tagFilter) ? "\nTag: " + JSON.stringify(tagFilter) : "") + ((instanceTypes) ? ", Instance Types: " + instanceTypes : "") + ((DBInstanceIdentifier) ? "Instances: " + DBInstanceIdentifier : "")
+    if (filterStr)
+        console.log("filtering on: " + filterStr);
     rds.describeDBInstances(dbparams, function (err, data) {
         //db instance exists..
         if (!err) {
@@ -549,15 +553,17 @@ function processLogs(params, cb) {
                             if (found) {
                                 if (noFilter || (instanceTypes && instanceTypes.indexOf(dbtype))) {
                                     //console.log('db type is: ' + dbtype);
-                                    processOrCreateLog(instanceId, dbType, function (err, data) {
+                                    processOrCreateLog(instanceId, dbtype, function (err, data) {
                                         if (!err) {
                                             //console.log("Data: " + JSON.stringify(data));
                                             if (data) {
                                                 completed.push(data);
-                                                fcallback();
                                             }
+                                            fcallback();
+
                                         } else {
-                                            cb(err, null);
+                                            //no graceful fallback, if an error occurs on any of the log processing we end..
+                                            fcallback(err);
                                         }
                                     });
                                 }
@@ -606,7 +612,7 @@ function processLogs(params, cb) {
 }
 
 
-//does check against tagFilter.Name & tagFilter.Value
+//does check against tagFilter.Name & optionally tagFilter.Value
 function checkRDSTag(arn, tagFilter, cb) {
     let params = {
         ResourceName: arn
@@ -616,10 +622,13 @@ function checkRDSTag(arn, tagFilter, cb) {
         if (err) {
             cb(err, null);
         } else {
+            //console.log("tag data returned: " + JSON.stringify(data));
             if (data && data.TagList) {
-                //console.log(data); // successful response
-                for (var tag in data.TagList) {
-                    if ((tag.Key === tagFilter.Name) && (tag.Value === tagFilter.Value)) {
+                //console.log("tags for arn: " + arn + " are " + JSON.stringify(data.TagList)); // successful response
+                for (let x = 0; x < data.TagList.length; x++) {
+                    //console.log("Key is: " + data.TagList[x].Key + ", filtering on: " + tagFilter.Name);
+                    if ((data.TagList[x].Key === tagFilter.Name) && ((tagFilter.Value) ? (data.TagList[x].Value === tagFilter.Value) : true)) {
+                        //console.log("tag found: " + data.TagList[x].Key);
                         cb(null, true);
                         break;
                     }
@@ -657,12 +666,19 @@ function processOrCreateLog(instanceId, dbtype, cb) {
             instrumentLogging(instanceId, dbtype, function (err, data) {
                 log.checkLogs(dbtype, instanceId, function (err, data) {
                     if (!err && data) {
-                        putCWLogEvents(instanceId, data, CWLogStreamData.logStream, function (err, data) {
+                        getCWLogStream(instanceId, dbType, function (err, CWLogStreamData) {
                             if (!err) {
-                                console.log("finished processing & placing events for: " + instanceId);
-                                cb(null, data);
+                                putCWLogEvents(instanceId, data, CWLogStreamData.logStream, function (err, data) {
+                                    if (!err) {
+                                        console.log("finished processing & placing events for: " + instanceId);
+                                        cb(null, data);
+                                    } else {
+                                        console.log("error placing events for: " + instanceId);
+                                        cb(err, null);
+                                    }
+                                });
                             } else {
-                                console.log("error placing events for: " + instanceId);
+                                console.log("Error getting log stream after creation...");
                                 cb(err, null);
                             }
                         });

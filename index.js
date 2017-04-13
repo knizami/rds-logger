@@ -11,7 +11,11 @@
 var rdslogs = require('./utils/dblogfiles');
 
 var dbparams = {
-    region: "us-west-2",
+    //Tag: {
+    //    Name: "repo-element-uid"
+    //},
+    region: "us-west-2"
+
 
 };
 
